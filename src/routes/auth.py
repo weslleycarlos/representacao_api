@@ -1,15 +1,15 @@
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, request
 from src.models.models import User, Company, UserCompany, db
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from functools import wraps
 
 auth_bp = Blueprint('auth', __name__)
 
-def login_required(f):
-    """Decorator para verificar se o usuário está logado"""
+def jwt_login_required(f):
+    """Decorator para verificar se o usuário está logado com JWT"""
+    @jwt_required()
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'user_id' not in session:
-            return jsonify({'error': 'Login necessário'}), 401
         return f(*args, **kwargs)
     return decorated_function
 
@@ -22,12 +22,10 @@ def register():
         if not data or not data.get('email') or not data.get('password'):
             return jsonify({'error': 'Email e senha são obrigatórios'}), 400
         
-        # Verifica se o usuário já existe
         existing_user = User.query.filter_by(email=data['email']).first()
         if existing_user:
             return jsonify({'error': 'Email já cadastrado'}), 400
         
-        # Cria novo usuário
         user = User(email=data['email'])
         user.set_password(data['password'])
         
@@ -52,14 +50,13 @@ def login():
         if not data or not data.get('email') or not data.get('password'):
             return jsonify({'error': 'Email e senha são obrigatórios'}), 400
         
-        # Busca o usuário
         user = User.query.filter_by(email=data['email']).first()
         
         if not user or not user.check_password(data['password']):
             return jsonify({'error': 'Email ou senha inválidos'}), 401
         
-        # Cria sessão
-        session['user_id'] = user.id
+        # Gera token JWT
+        access_token = create_access_token(identity=user.id)
         
         # Busca empresas do usuário
         user_companies = db.session.query(UserCompany, Company).join(
@@ -71,22 +68,21 @@ def login():
         return jsonify({
             'message': 'Login realizado com sucesso',
             'user': user.to_dict(),
-            'companies': companies
+            'companies': companies,
+            'token': access_token  # Adiciona o token na resposta
         }), 200
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/logout', methods=['POST'])
-@login_required
+@jwt_login_required
 def logout():
-    """Faz logout do usuário"""
-    session.pop('user_id', None)
-    session.pop('company_id', None)
+    """Faz logout do usuário (JWT é stateless, logout é gerenciado no frontend)"""
     return jsonify({'message': 'Logout realizado com sucesso'}), 200
 
 @auth_bp.route('/select-company', methods=['POST'])
-@login_required
+@jwt_login_required
 def select_company():
     """Seleciona a empresa ativa para o usuário"""
     try:
@@ -95,17 +91,15 @@ def select_company():
         if not data or not data.get('company_id'):
             return jsonify({'error': 'ID da empresa é obrigatório'}), 400
         
-        # Verifica se o usuário tem acesso à empresa
+        current_user_id = get_jwt_identity()
+        
         user_company = UserCompany.query.filter_by(
-            user_id=session['user_id'],
+            user_id=current_user_id,
             company_id=data['company_id']
         ).first()
         
         if not user_company:
             return jsonify({'error': 'Acesso negado à empresa'}), 403
-        
-        # Define a empresa ativa na sessão
-        session['company_id'] = data['company_id']
         
         company = Company.query.get(data['company_id'])
         
@@ -118,23 +112,27 @@ def select_company():
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/me', methods=['GET'])
-@login_required
+@jwt_login_required
 def get_current_user():
     """Retorna informações do usuário logado"""
     try:
-        user = User.query.get(session['user_id'])
+        current_user_id = get_jwt_identity()
+        user = User.query.get(current_user_id)
         
         response_data = {
             'user': user.to_dict(),
-            'company_id': session.get('company_id')
+            'company_id': None,
+            'company': None
         }
         
-        if session.get('company_id'):
-            company = Company.query.get(session['company_id'])
-            response_data['company'] = company.to_dict() if company else None
+        # Busca a empresa selecionada (armazenada no banco ou em cache, se necessário)
+        user_company = UserCompany.query.filter_by(user_id=current_user_id).first()
+        if user_company:
+            company = Company.query.get(user_company.company_id)
+            response_data['company_id'] = company.id
+            response_data['company'] = company.to_dict()
         
         return jsonify(response_data), 200
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
