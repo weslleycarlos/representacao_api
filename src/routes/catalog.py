@@ -1,19 +1,21 @@
-from flask import Blueprint, jsonify, request, session
-from src.models.models import Product, PaymentMethod, db
-from src.routes.auth import login_required
+from flask import Blueprint, jsonify, request
+from src.models.models import Product, PaymentMethod, db, UserCompany
+from src.routes.auth import jwt_login_required
 from sqlalchemy import and_
+from flask_jwt_extended import get_jwt_identity
 
 catalog_bp = Blueprint('catalog', __name__)
 
 @catalog_bp.route('/products', methods=['GET'])
-@login_required
+@jwt_login_required
 def get_products():
     """Lista todos os produtos da empresa selecionada"""
     try:
-        company_id = session.get('company_id')
-        
-        if not company_id:
+        user_id = get_jwt_identity()
+        user_company = UserCompany.query.filter_by(user_id=user_id).first()
+        if not user_company:
             return jsonify({'error': 'Empresa não selecionada'}), 400
+        company_id = user_company.company_id
         
         products = Product.query.filter_by(company_id=company_id).all()
         
@@ -23,36 +25,32 @@ def get_products():
         return jsonify({'error': str(e)}), 500
 
 @catalog_bp.route('/products', methods=['POST'])
-@login_required
+@jwt_login_required
 def create_product():
     """Cria um novo produto"""
     try:
-        company_id = session.get('company_id')
-        
-        if not company_id:
+        user_id = get_jwt_identity()
+        user_company = UserCompany.query.filter_by(user_id=user_id).first()
+        if not user_company:
             return jsonify({'error': 'Empresa não selecionada'}), 400
+        company_id = user_company.company_id
         
         data = request.json
-        
         if not data:
             return jsonify({'error': 'Dados do produto são obrigatórios'}), 400
         
-        # Validações básicas
         required_fields = ['code', 'description', 'value']
         for field in required_fields:
             if not data.get(field):
                 return jsonify({'error': f'{field} é obrigatório'}), 400
         
-        # Verifica se o código já existe na empresa
         existing_product = Product.query.filter_by(
             company_id=company_id,
             code=data['code']
         ).first()
-        
         if existing_product:
             return jsonify({'error': 'Código do produto já existe nesta empresa'}), 400
         
-        # Cria o produto
         product = Product(
             company_id=company_id,
             code=data['code'],
@@ -74,9 +72,15 @@ def create_product():
         return jsonify({'error': str(e)}), 500
 
 @catalog_bp.route('/payment-methods', methods=['GET'])
+@jwt_login_required
 def get_payment_methods():
     """Lista todas as formas de pagamento ativas"""
     try:
+        user_id = get_jwt_identity()
+        user_company = UserCompany.query.filter_by(user_id=user_id).first()
+        if not user_company:
+            return jsonify({'error': 'Empresa não selecionada'}), 400
+        
         payment_methods = PaymentMethod.query.filter_by(is_active=True).all()
         
         return jsonify([method.to_dict() for method in payment_methods]), 200
@@ -85,21 +89,23 @@ def get_payment_methods():
         return jsonify({'error': str(e)}), 500
 
 @catalog_bp.route('/payment-methods', methods=['POST'])
-@login_required
+@jwt_login_required
 def create_payment_method():
     """Cria uma nova forma de pagamento"""
     try:
-        data = request.json
+        user_id = get_jwt_identity()
+        user_company = UserCompany.query.filter_by(user_id=user_id).first()
+        if not user_company:
+            return jsonify({'error': 'Empresa não selecionada'}), 400
         
+        data = request.json
         if not data or not data.get('name'):
             return jsonify({'error': 'Nome da forma de pagamento é obrigatório'}), 400
         
-        # Verifica se já existe
         existing_method = PaymentMethod.query.filter_by(name=data['name']).first()
         if existing_method:
             return jsonify({'error': 'Forma de pagamento já existe'}), 400
         
-        # Cria a forma de pagamento
         payment_method = PaymentMethod(
             name=data['name'],
             is_active=data.get('is_active', True)
@@ -116,4 +122,3 @@ def create_payment_method():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
-

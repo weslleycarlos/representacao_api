@@ -1,21 +1,24 @@
-from flask import Blueprint, jsonify, request, session
-from src.models.models import Order, OrderItem, Client, Product, PaymentMethod, db
-from src.routes.auth import login_required
+from flask import Blueprint, jsonify, request
+from src.models.models import Order, OrderItem, Client, Product, PaymentMethod, db, UserCompany
+from src.routes.auth import jwt_login_required
 from sqlalchemy import and_
 from decimal import Decimal
+from flask_jwt_extended import get_jwt_identity
 
 orders_bp = Blueprint('orders', __name__)
 
 @orders_bp.route('/', methods=['GET'])
-@login_required
+@jwt_login_required
 def get_orders():
     """Lista todos os pedidos do usuário na empresa selecionada"""
     try:
-        user_id = session['user_id']
-        company_id = session.get('company_id')
+        user_id = get_jwt_identity()
         
-        if not company_id:
+        # Obter company_id da associação UserCompany
+        user_company = UserCompany.query.filter_by(user_id=user_id).first()
+        if not user_company:
             return jsonify({'error': 'Empresa não selecionada'}), 400
+        company_id = user_company.company_id
         
         orders = Order.query.filter(
             and_(
@@ -30,22 +33,23 @@ def get_orders():
         return jsonify({'error': str(e)}), 500
 
 @orders_bp.route('/', methods=['POST'])
-@login_required
+@jwt_login_required
 def create_order():
     """Cria um novo pedido"""
     try:
-        user_id = session['user_id']
-        company_id = session.get('company_id')
+        user_id = get_jwt_identity()
         
-        if not company_id:
+        # Obter company_id da associação UserCompany
+        user_company = UserCompany.query.filter_by(user_id=user_id).first()
+        if not user_company:
             return jsonify({'error': 'Empresa não selecionada'}), 400
+        company_id = user_company.company_id
         
         data = request.json
         
         if not data:
             return jsonify({'error': 'Dados do pedido são obrigatórios'}), 400
         
-        # Validações básicas
         required_fields = ['client_cnpj', 'client_razao_social', 'items']
         for field in required_fields:
             if not data.get(field):
@@ -54,7 +58,6 @@ def create_order():
         if not data['items'] or len(data['items']) == 0:
             return jsonify({'error': 'Pelo menos um item é obrigatório'}), 400
         
-        # Verifica se há pelo menos um item com quantidade > 0
         has_valid_item = False
         for item in data['items']:
             if item.get('quantity'):
@@ -68,7 +71,6 @@ def create_order():
         if not has_valid_item:
             return jsonify({'error': 'Pelo menos um item deve ter quantidade maior que zero'}), 400
         
-        # Busca ou cria o cliente
         client = Client.query.filter_by(cnpj=data['client_cnpj']).first()
         if not client:
             client = Client(
@@ -77,16 +79,14 @@ def create_order():
                 nome_fantasia=data.get('client_nome_fantasia', '')
             )
             db.session.add(client)
-            db.session.flush()  # Para obter o ID do cliente
+            db.session.flush()
         
-        # Busca método de pagamento se fornecido
         payment_method_id = None
         if data.get('payment_method_id'):
             payment_method = PaymentMethod.query.get(data['payment_method_id'])
             if payment_method and payment_method.is_active:
                 payment_method_id = payment_method.id
         
-        # Calcula o valor total
         total_value = Decimal('0.00')
         order_items_data = []
         
@@ -99,7 +99,6 @@ def create_order():
             if not product:
                 return jsonify({'error': f'Produto {item_data["code"]} não encontrado'}), 404
             
-            # Calcula quantidade total do item
             item_total_qty = sum(item_data['quantity'].values())
             if item_total_qty > 0:
                 item_value = Decimal(str(item_data.get('unit_value', product.value))) * item_total_qty
@@ -111,13 +110,11 @@ def create_order():
                     'unit_value': Decimal(str(item_data.get('unit_value', product.value)))
                 })
         
-        # Aplica desconto se fornecido
         discount_percentage = Decimal(str(data.get('discount_percentage', 0)))
         if discount_percentage > 0:
             discount_amount = total_value * (discount_percentage / 100)
             total_value -= discount_amount
         
-        # Cria o pedido
         order = Order(
             user_id=user_id,
             company_id=company_id,
@@ -125,13 +122,12 @@ def create_order():
             payment_method_id=payment_method_id,
             discount_percentage=discount_percentage,
             total_value=total_value,
-            status='Concluído'  # Pedidos criados via API são considerados concluídos
+            status='Concluído'
         )
         
         db.session.add(order)
-        db.session.flush()  # Para obter o ID do pedido
+        db.session.flush()
         
-        # Cria os itens do pedido
         for item_data in order_items_data:
             order_item = OrderItem(
                 order_id=order.id,
@@ -143,7 +139,6 @@ def create_order():
         
         db.session.commit()
         
-        # Recarrega o pedido com relacionamentos
         order = Order.query.get(order.id)
         
         return jsonify({
@@ -156,15 +151,17 @@ def create_order():
         return jsonify({'error': str(e)}), 500
 
 @orders_bp.route('/<int:order_id>', methods=['GET'])
-@login_required
+@jwt_login_required
 def get_order(order_id):
     """Busca um pedido específico"""
     try:
-        user_id = session['user_id']
-        company_id = session.get('company_id')
+        user_id = get_jwt_identity()
         
-        if not company_id:
+        # Obter company_id da associação UserCompany
+        user_company = UserCompany.query.filter_by(user_id=user_id).first()
+        if not user_company:
             return jsonify({'error': 'Empresa não selecionada'}), 400
+        company_id = user_company.company_id
         
         order = Order.query.filter(
             and_(
@@ -183,15 +180,17 @@ def get_order(order_id):
         return jsonify({'error': str(e)}), 500
 
 @orders_bp.route('/sync', methods=['POST'])
-@login_required
+@jwt_login_required
 def sync_orders():
     """Sincroniza pedidos offline (recebe uma lista de pedidos para criar)"""
     try:
-        user_id = session['user_id']
-        company_id = session.get('company_id')
+        user_id = get_jwt_identity()
         
-        if not company_id:
+        # Obter company_id da associação UserCompany
+        user_company = UserCompany.query.filter_by(user_id=user_id).first()
+        if not user_company:
             return jsonify({'error': 'Empresa não selecionada'}), 400
+        company_id = user_company.company_id
         
         data = request.json
         
@@ -203,8 +202,6 @@ def sync_orders():
         
         for order_data in data['orders']:
             try:
-                # Reutiliza a lógica de criação de pedido
-                # Validações básicas
                 required_fields = ['client_cnpj', 'client_razao_social', 'items']
                 valid = True
                 for field in required_fields:
@@ -219,7 +216,6 @@ def sync_orders():
                     })
                     continue
                 
-                # Verifica se há pelo menos um item com quantidade > 0
                 has_valid_item = False
                 for item in order_data['items']:
                     if item.get('quantity'):
@@ -237,7 +233,6 @@ def sync_orders():
                     })
                     continue
                 
-                # Busca ou cria o cliente
                 client = Client.query.filter_by(cnpj=order_data['client_cnpj']).first()
                 if not client:
                     client = Client(
@@ -248,14 +243,12 @@ def sync_orders():
                     db.session.add(client)
                     db.session.flush()
                 
-                # Busca método de pagamento se fornecido
                 payment_method_id = None
                 if order_data.get('payment_method_id'):
                     payment_method = PaymentMethod.query.get(order_data['payment_method_id'])
                     if payment_method and payment_method.is_active:
                         payment_method_id = payment_method.id
                 
-                # Calcula o valor total
                 total_value = Decimal('0.00')
                 order_items_data = []
                 
@@ -268,7 +261,6 @@ def sync_orders():
                     if not product:
                         raise Exception(f'Produto {item_data["code"]} não encontrado')
                     
-                    # Calcula quantidade total do item
                     item_total_qty = sum(item_data['quantity'].values())
                     if item_total_qty > 0:
                         item_value = Decimal(str(item_data.get('unit_value', product.value))) * item_total_qty
@@ -280,13 +272,11 @@ def sync_orders():
                             'unit_value': Decimal(str(item_data.get('unit_value', product.value)))
                         })
                 
-                # Aplica desconto se fornecido
                 discount_percentage = Decimal(str(order_data.get('discount_percentage', 0)))
                 if discount_percentage > 0:
                     discount_amount = total_value * (discount_percentage / 100)
                     total_value -= discount_amount
                 
-                # Cria o pedido
                 order = Order(
                     user_id=user_id,
                     company_id=company_id,
@@ -300,7 +290,6 @@ def sync_orders():
                 db.session.add(order)
                 db.session.flush()
                 
-                # Cria os itens do pedido
                 for item_data in order_items_data:
                     order_item = OrderItem(
                         order_id=order.id,
@@ -331,4 +320,3 @@ def sync_orders():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
-

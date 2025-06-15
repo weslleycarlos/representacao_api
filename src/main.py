@@ -11,36 +11,39 @@ from src.routes.dashboard import dashboard_bp
 from src.routes.cnpj import cnpj_bp
 from src.routes.orders import orders_bp
 from src.routes.catalog import catalog_bp
+from src.routes.user import user_bp
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default-secret-key')  # Use variável de ambiente
-app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY', 'default-secret-key')  # Para JWT
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default-secret-key')
+app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY', 'default-secret-key')
+CORS(app, 
+     resources={r"/api/*": {
+         "origins": ["http://localhost:5173", "https://representacao-frontend.onrender.com"],
+         "methods": ["GET", "POST", "PUT", "DELETE"],
+         "allow_headers": ["Content-Type", "Authorization"],
+         "supports_credentials": True  # Isso é crucial para cookies/sessão
+     }},
+     supports_credentials=True)
 
-# Configuração CORS
-CORS(app, resources={r"/api/*": {"origins": "https://representacao-frontend.onrender.com"}})
-
-# Inicializa JWT
 jwt = JWTManager(app)
 
-# Registra os blueprints
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
 app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
 app.register_blueprint(cnpj_bp, url_prefix='/api/cnpj')
 app.register_blueprint(orders_bp, url_prefix='/api/orders')
 app.register_blueprint(catalog_bp, url_prefix='/api/catalog')
+app.register_blueprint(user_bp, url_prefix='/api/user')
 
-# Configuração do banco de dados (Supabase)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI', f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
 
-# Cria as tabelas do banco de dados
 with app.app_context():
     db.create_all()
-    
-    # Adiciona dados iniciais se necessário
     from src.models.models import PaymentMethod, Company, User, UserCompany, Product
-    
     if PaymentMethod.query.count() == 0:
         payment_methods = [
             PaymentMethod(name='Dinheiro'),
@@ -52,7 +55,6 @@ with app.app_context():
         ]
         for method in payment_methods:
             db.session.add(method)
-    
     if User.query.count() == 0:
         company = Company(
             name='Empresa Exemplo Ltda',
@@ -60,15 +62,12 @@ with app.app_context():
         )
         db.session.add(company)
         db.session.flush()
-        
         user = User(email='admin@exemplo.com')
         user.set_password('123456')
         db.session.add(user)
         db.session.flush()
-        
         user_company = UserCompany(user_id=user.id, company_id=company.id)
         db.session.add(user_company)
-        
         products = [
             Product(
                 company_id=company.id,
@@ -94,7 +93,6 @@ with app.app_context():
         ]
         for product in products:
             db.session.add(product)
-    
     db.session.commit()
 
 @app.route('/', defaults={'path': ''})
@@ -103,7 +101,6 @@ def serve(path):
     static_folder_path = app.static_folder
     if static_folder_path is None:
         return "Static folder not configured", 404
-
     if path != "" and os.path.exists(os.path.join(static_folder_path, path)):
         return send_from_directory(static_folder_path, path)
     else:

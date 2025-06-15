@@ -88,20 +88,23 @@ def select_company():
     try:
         data = request.json
         
-        if not data or not data.get('company_id'):
+        if not data or 'company_id' not in data:
             return jsonify({'error': 'ID da empresa é obrigatório'}), 400
+        
+        # Converta company_id para string (se necessário)
+        company_id = str(data['company_id'])
         
         current_user_id = get_jwt_identity()
         
         user_company = UserCompany.query.filter_by(
             user_id=current_user_id,
-            company_id=data['company_id']
+            company_id=company_id  # Agora garantido como string
         ).first()
         
         if not user_company:
             return jsonify({'error': 'Acesso negado à empresa'}), 403
         
-        company = Company.query.get(data['company_id'])
+        company = Company.query.get(company_id)
         
         return jsonify({
             'message': 'Empresa selecionada com sucesso',

@@ -1,27 +1,31 @@
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify
 from src.models.models import Order, Client, db
-from src.routes.auth import login_required
+from src.routes.auth import jwt_login_required
 from datetime import datetime, timedelta
 from sqlalchemy import func, and_
+from flask_jwt_extended import get_jwt_identity
+from src.models.models import UserCompany, Company
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
 @dashboard_bp.route('/metrics', methods=['GET'])
-@login_required
+@jwt_login_required
 def get_dashboard_metrics():
     """Retorna métricas para o dashboard"""
     try:
-        user_id = session['user_id']
-        company_id = session.get('company_id')
+        user_id = get_jwt_identity()
         
-        if not company_id:
+        # Obter company_id da associação UserCompany
+        user_company = UserCompany.query.filter_by(user_id=user_id).first()
+        if not user_company:
             return jsonify({'error': 'Empresa não selecionada'}), 400
+        company_id = user_company.company_id
         
         # Data de hoje e ontem
         today = datetime.now().date()
         yesterday = today - timedelta(days=1)
         
-        # Data de 30 dias atrás e 60 dias atrás (para comparação)
+        # Data de 30 dias atrás e 60 dias atrás
         thirty_days_ago = today - timedelta(days=30)
         sixty_days_ago = today - timedelta(days=60)
         
@@ -45,7 +49,7 @@ def get_dashboard_metrics():
             )
         ).count()
         
-        # Cálculo da variação percentual dos pedidos
+        # Variação percentual dos pedidos
         orders_variation = 0
         if orders_yesterday > 0:
             orders_variation = ((orders_today - orders_yesterday) / orders_yesterday) * 100
@@ -62,7 +66,7 @@ def get_dashboard_metrics():
             )
         ).scalar() or 0
         
-        # Valor total dos 30 dias anteriores (para comparação)
+        # Valor total dos 30 dias anteriores
         total_value_previous_30_days = db.session.query(func.sum(Order.total_value)).filter(
             and_(
                 Order.user_id == user_id,
@@ -73,7 +77,7 @@ def get_dashboard_metrics():
             )
         ).scalar() or 0
         
-        # Cálculo da variação percentual do valor
+        # Variação percentual do valor
         value_variation = 0
         if total_value_previous_30_days > 0:
             value_variation = ((float(total_value_30_days) - float(total_value_previous_30_days)) / float(total_value_previous_30_days)) * 100
@@ -104,15 +108,17 @@ def get_dashboard_metrics():
         return jsonify({'error': str(e)}), 500
 
 @dashboard_bp.route('/pending-orders-count', methods=['GET'])
-@login_required
+@jwt_login_required
 def get_pending_orders_count():
     """Retorna a contagem de pedidos pendentes no banco"""
     try:
-        user_id = session['user_id']
-        company_id = session.get('company_id')
+        user_id = get_jwt_identity()
         
-        if not company_id:
+        # Obter company_id da associação UserCompany
+        user_company = UserCompany.query.filter_by(user_id=user_id).first()
+        if not user_company:
             return jsonify({'error': 'Empresa não selecionada'}), 400
+        company_id = user_company.company_id
         
         pending_count = Order.query.filter(
             and_(
@@ -126,4 +132,3 @@ def get_pending_orders_count():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
